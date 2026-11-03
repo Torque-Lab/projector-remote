@@ -7,7 +7,8 @@
 #include <thread>
 #include <algorithm>
 #include <cstdio>
-
+#include <cstring>
+using namespace std;
 #pragma comment(lib, "ws2_32.lib")
 
 const int COMMAND_PORT = 45678;
@@ -185,50 +186,87 @@ void discoveryServer()
 {
     SOCKET sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
 
-    sockaddr_in addr = {};
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(DISCOVERY_PORT);
-    addr.sin_addr.s_addr = INADDR_ANY;
-
-    if (sock == INVALID_SOCKET ||
-        bind(sock, (sockaddr*)&addr, sizeof(addr)) == SOCKET_ERROR) {
-        std::cout << "Discovery server failed\n";
-        if (sock != INVALID_SOCKET) closesocket(sock);
+    if (sock == INVALID_SOCKET) {
+        std::cout << "[DISCOVERY] Socket creation failed: "
+                  << WSAGetLastError() << "\n";
         return;
     }
 
-    char buffer[128];
+    sockaddr_in addr = {};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(DISCOVERY_PORT);
+    addr.sin_addr.s_addr = htonl(INADDR_ANY);
 
-    std::cout << "Discovery service running\n";
+    if (bind(sock, (sockaddr*)&addr, sizeof(addr)) == SOCKET_ERROR) {
+        std::cout << "[DISCOVERY] Bind failed: "
+                  << WSAGetLastError() << "\n";
+
+        closesocket(sock);
+        return;
+    }
+
+    std::cout << "[DISCOVERY] Listening on UDP "
+              << DISCOVERY_PORT << "\n";
+
+    const char response[] = "REMOTE_HOST_READY|1|45678";
+    char buffer[256];
 
     while (true)
     {
         sockaddr_in client = {};
-        int len = sizeof(client);
+        int clientLen = sizeof(client);
 
-        int n = recvfrom(
-            sock, buffer, sizeof(buffer) - 1,
-            0, (sockaddr*)&client, &len
+        int received = recvfrom(
+            sock,
+            buffer,
+            sizeof(buffer) - 1,
+            0,
+            (sockaddr*)&client,
+            &clientLen
         );
 
-        if (n == SOCKET_ERROR)
+        if (received == SOCKET_ERROR) {
+            std::cout << "[DISCOVERY] Receive error: "
+                      << WSAGetLastError() << "\n";
+            continue;
+        }
+
+        buffer[received] = '\0';
+
+        if (std::string(buffer) != "DISCOVER_REMOTE")
             continue;
 
-        buffer[n] = '\0';
+        std::cout << "[DISCOVERY] Request from "
+                  << inet_ntoa(client.sin_addr)
+                  << ":" << ntohs(client.sin_port) << "\n";
 
-        if (std::string(buffer) == "DISCOVER_REMOTE")
-        {
-            const char* response = "REMOTE_HOST_READY";
+        int sent = sendto(
+            sock,
+            response,
+            sizeof(response) - 1,
+            0,
+            (sockaddr*)&client,
+            clientLen
+        );
 
-            sendto(
-                sock, response, (int)strlen(response),
-                0, (sockaddr*)&client, len
-            );
-
-            std::cout << "Discovery response sent\n";
+        if (sent == SOCKET_ERROR) {
+            std::cout << "[DISCOVERY] SEND FAILED: "
+                      << WSAGetLastError() << "\n";
+        }
+        else if (sent != sizeof(response) - 1) {
+            std::cout << "[DISCOVERY] Incomplete response\n";
+        }
+        else {
+            std::cout << "[DISCOVERY] Response delivered to "
+                      << inet_ntoa(client.sin_addr)
+                      << ":" << ntohs(client.sin_port)
+                      << " (" << sent << " bytes)\n";
         }
     }
+
+    closesocket(sock);
 }
+
 
 int main()
 {
